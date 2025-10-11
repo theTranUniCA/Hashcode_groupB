@@ -1,120 +1,140 @@
 import os
-import argparse
+import heapq
+from dataclasses import dataclass
 
 
-def read_input(filename):
-    """
-    Read the input file and parse the problem parameters.
-    Returns: rows, cols, vehicles, number of rides, bonus, total steps, rides list
-    """
+@dataclass
+class Ride:
+    startRow: int
+    startCol: int
+    endRow: int
+    endCol: int
+    earliestStart: int
+    latestFinish: int
+
+    def length(self):
+        return abs(self.startRow - self.endRow) + abs(self.startCol - self.endCol)
+
+
+def readInput(filename):
     with open(filename, "r") as f:
-        rows, cols, veh, n_rides, bonus, steps = map(int, f.readline().split())
+        rows, cols, numVehicles, numRides, bonus, totalSteps = map(int, f.readline().split())
         rides = []
-        for _ in range(n_rides):
+        for _ in range(numRides):
             a, b, x, y, s, f_end = map(int, f.readline().split())
-            rides.append((a, b, x, y, s, f_end))
-    return rows, cols, veh, n_rides, bonus, steps, rides
+            rides.append(Ride(a, b, x, y, s, f_end))
+    return rows, cols, numVehicles, numRides, bonus, totalSteps, rides
 
 
-def manhattan(a, b):
-    """Compute Manhattan distance between two points a and b."""
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+def manhattanDistance(pointA, pointB):
+    return abs(pointA[0] - pointB[0]) + abs(pointA[1] - pointB[1])
 
 
-def solve(rows, cols, veh, n_rides, bonus, steps, rides):
-    """
-    Greedy heuristic solver:
-    Assign rides to vehicles based on earliest available vehicle
-    and earliest feasible ride start time.
-    """
-    ride_len = [manhattan((a, b), (x, y)) for (a, b, x, y, s, f) in rides]
-
-    t_of_the_car = [0] * veh
-    car_x = [0] * veh
-    car_y = [0] * veh
-    sched = [[] for _ in range(veh)]
-
-    taken = [False] * n_rides
+def computeScore(vehicleSchedules, rides, bonus):
+    """Compute total score from schedules."""
     score = 0
+    for schedule in vehicleSchedules:
+        time = 0
+        position = (0, 0)
+        for idx in schedule:
+            ride = rides[idx]
+            distToStart = manhattanDistance(position, (ride.startRow, ride.startCol))
+            startTime = max(time + distToStart, ride.earliestStart)
+            finishTime = startTime + ride.length()
+            if finishTime <= ride.latestFinish:
+                score += ride.length()
+                if startTime == ride.earliestStart:
+                    score += bonus
+                position = (ride.endRow, ride.endCol)
+                time = finishTime
+            else:
+                break
+    return score
 
-    while True:
-        cur_t = steps
-        j = -1
-        for v in range(veh):
-            if t_of_the_car[v] < cur_t:
-                cur_t = t_of_the_car[v]
-                j = v
 
-        if cur_t >= steps or j == -1:
-            break
+def solve(rows, cols, numVehicles, numRides, bonus, totalSteps, rides):
+    rideLengths = [ride.length() for ride in rides]
 
-        best_start = steps
-        k = -1
-        for i in range(n_rides):
-            if taken[i]:
-                continue
-            a, b, x, y, s, f = rides[i]
-            go = manhattan((car_x[j], car_y[j]), (a, b))
-            finish = cur_t + go + ride_len[i]
+    # Vehicle state
+    vehiclePositions = [(0, 0) for _ in range(numVehicles)]
+    vehicleSchedules = [[] for _ in range(numVehicles)]
+    rideTaken = [False] * numRides
 
-            if finish <= f:
-                start_time = max(cur_t + go, s)
-                if start_time < best_start:
-                    best_start = start_time
-                    k = i
+    # Min-heap: (timeVehicleIsFree, vehicleIndex)
+    availableVehicles = [(0, v) for v in range(numVehicles)]
+    heapq.heapify(availableVehicles)
 
-        if k == -1:
-            t_of_the_car[j] = steps
+    while availableVehicles:
+        currentTime, vehicleIndex = heapq.heappop(availableVehicles)
+
+        if currentTime >= totalSteps:
             continue
 
-        taken[k] = True
-        a, b, x, y, s, f = rides[k]
-        sched[j].append(k)
-        car_x[j], car_y[j] = x, y
-        t_of_the_car[j] = best_start + ride_len[k]
+        bestStartTime = totalSteps
+        bestRideIndex = -1
 
-        score += ride_len[k]
-        if best_start == s:
-            score += bonus
+        for i, ride in enumerate(rides):
+            if rideTaken[i]:
+                continue
 
-    return score, sched
+            distToStart = manhattanDistance(vehiclePositions[vehicleIndex],
+                                            (ride.startRow, ride.startCol))
+            finishTime = currentTime + distToStart + rideLengths[i]
+
+            if finishTime > ride.latestFinish:
+                continue
+
+            startTime = max(currentTime + distToStart, ride.earliestStart)
+            if startTime < bestStartTime:
+                bestStartTime = startTime
+                bestRideIndex = i
+
+        if bestRideIndex == -1:
+            continue
+
+        # Assign the ride
+        rideTaken[bestRideIndex] = True
+        ride = rides[bestRideIndex]
+        vehicleSchedules[vehicleIndex].append(bestRideIndex)
+
+        vehiclePositions[vehicleIndex] = (ride.endRow, ride.endCol)
+        newTime = bestStartTime + rideLengths[bestRideIndex]
+        heapq.heappush(availableVehicles, (newTime, vehicleIndex))
+
+    # ---- Local Search Optimization ----
+    improved = True
+    while improved:
+        improved = False
+        for v1 in range(numVehicles):
+            for v2 in range(v1 + 1, numVehicles):
+                for i in range(len(vehicleSchedules[v1])):
+                    for j in range(len(vehicleSchedules[v2])):
+                        # Swap ride i in v1 with ride j in v2
+                        vehicleSchedules[v1][i], vehicleSchedules[v2][j] = vehicleSchedules[v2][j], vehicleSchedules[v1][i]
+                        newScore = computeScore(vehicleSchedules, rides, bonus)
+                        if newScore > computeScore(vehicleSchedules, rides, bonus):
+                            improved = True
+                        else:
+                            # Swap back if not better
+                            vehicleSchedules[v1][i], vehicleSchedules[v2][j] = vehicleSchedules[v2][j], vehicleSchedules[v1][i]
+    totalScore = computeScore(vehicleSchedules, rides, bonus)
+    return totalScore, vehicleSchedules
 
 
-def write_output(filename, sched):
-    """Write the vehicle schedules to output file."""
+def writeOutput(filename, vehicleSchedules):
     with open(filename, "w") as f:
-        for rides in sched:
+        for rides in vehicleSchedules:
             f.write(str(len(rides)) + " " + " ".join(map(str, rides)) + "\n")
-
-    print("=== Vehicle Ride Assignments ===")
-    for i, rides in enumerate(sched):
-        print(f"Vehicle {i} is assigned {len(rides)} rides: {rides}")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Hash Code Ride Scheduling Solver")
-    parser.add_argument("--input", "-i", required=True, help="Path to input file (.in)")
-    parser.add_argument("--output", "-o", default=None, help="Path to save output file (.out)")
-    args = parser.parse_args()
-
-    input_file = args.input
-    output_file = args.output
-
-    if output_file is None:
-        os.makedirs("./output", exist_ok=True)
-        base = os.path.basename(input_file).replace(".in", ".out")
-        output_file = os.path.join("./output", base)
-
-    print(f"Reading input file: {input_file}")
-    rows, cols, veh, n_rides, bonus, steps, rides = read_input(input_file)
-
-    print(f"Solving... (vehicles={veh}, rides={n_rides})")
-    score, sched = solve(rows, cols, veh, n_rides, bonus, steps, rides)
-    print(f"✅ Final Score = {score}")
-
-    write_output(output_file, sched)
-    print(f"\n📁 Output saved to {output_file}")
 
 
 if __name__ == "__main__":
-    main()
+    filename = "./input/bCopy.in"
+    rows, cols, numVehicles, numRides, bonus, totalSteps, rides = readInput(filename)
+
+    totalScore, vehicleSchedules = solve(rows, cols, numVehicles, numRides, bonus, totalSteps, rides)
+    print("Score =", totalScore)
+
+    os.makedirs("./output", exist_ok=True)
+    baseName = os.path.basename(filename).replace(".in", ".out")
+    outFile = os.path.join("./output", baseName)
+    writeOutput(outFile, vehicleSchedules)
