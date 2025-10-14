@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hash Code — Visualization</title>
+
+  <!-- Bootstrap & D3 -->
+  <link rel="stylesheet"
+        href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css"
+        crossorigin="anonymous">
+  <script src="https://d3js.org/d3.v4.min.js"></script>
+  <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"
+          crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"
+          crossorigin="anonymous"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"
+          crossorigin="anonymous"></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; padding: 0; font-family: "Segoe UI", sans-serif; background: #f5f5f5; }
+    body { display: flex; flex-direction: column; }
+    .navbar { padding: 0.5rem 1rem; background: #343a40; display:flex; justify-content: space-between; align-items: center; }
+    .navbar .btn { margin-left: 5px; }
+    .navbar-text { color:#fff; margin-left: 10px; }
+
+    .main-content { flex: 1; display: flex; padding: 10px; box-sizing: border-box; gap: 10px; }
+    #svg { flex: 3; background: #fff; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+    #missed-list { flex: 1; background: #fff; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); padding: 10px; overflow-y: auto; }
+    #missed-list h5 { margin-top: 0; }
+
+    .box { border-radius:50%; display:inline-block; height:20px; width:20px; vertical-align:middle; }
+    #holder { border:2px dashed #ccc; width:300px; min-height:300px; margin:20px auto; border-radius:8px; text-align:center; padding:20px; background:#fafafa; }
+    #holder.hover { border-color:#0c0; background:#f0fff0; }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div>
+      <button class="btn btn-primary btn-sm" id="generate">Generate 50 Random Rides</button>
+      <button class="btn btn-success btn-sm" id="showall">Show All Rides</button>
+      <button class="btn btn-secondary btn-sm" id="uploadbtn">Upload</button>
+    </div>
+    <div>
+      <span class="navbar-text">Ride taken: <span class="box" style="background:green"></span></span>
+      <span class="navbar-text">Taken w/o points: <span class="box" style="background:orange"></span></span>
+      <span class="navbar-text">Missed: <span class="box" style="background:red"></span></span>
+      <span class="navbar-text">Bonus: <span class="box" style="background:yellow"></span></span>
+    </div>
+  </nav>
+
+  <div class="main-content">
+    <svg id="svg" viewBox="0 0 100 100"></svg>
+    <div id="missed-list">
+      <h5>Missed Ride IDs</h5>
+      <ul id="missed-ul"></ul>
+    </div>
+  </div>
+
+  <!-- Modal upload -->
+  <div class="modal fade" id="exampleModalCenter" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Visualize Submission</h5>
+          <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span>&times;</span></button>
+        </div>
+        <div class="modal-body">
+          <div id="holder">Drag & drop a visualization file here</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // Resize SVG
+    function resizeSvgContainer() {
+      const svg = document.querySelector('#svg');
+      svg.style.height = (window.innerHeight - document.querySelector('.navbar').offsetHeight - 20) + 'px';
+    }
+    window.addEventListener('resize', resizeSvgContainer);
+    resizeSvgContainer();
+
+    const modalEl = $('#exampleModalCenter');
+    modalEl.modal({ backdrop: 'static', show: false });
+    document.getElementById('uploadbtn').addEventListener('click', () => modalEl.modal('toggle'));
+
+    class HashcodeVisualizer {
+      constructor(svgSelection, data) {
+        this.svg = svgSelection;
+        this.data = data;
+        this.lineWidth = 2;
+        this.missedListEl = document.getElementById('missed-ul');
+        this.init();
+      }
+
+      init() {
+        this.svg.selectAll('*').remove();
+        this.missedListEl.innerHTML = '';
+        this.svgWidth = Math.floor(this.svg.node().getBoundingClientRect().width);
+        this.svgHeight = Math.floor(this.svg.node().getBoundingClientRect().height);
+        d3.select('#svg').attr('viewBox', `0 0 ${this.svgWidth} ${this.svgHeight}`);
+        this.dataWidth = this.data.column;
+        this.dataHeight = this.data.row;
+        const margin = this.lineWidth * 6;
+        this.scale = Math.min((this.svgWidth - margin) / this.dataWidth, (this.svgHeight - margin) / this.dataHeight);
+        this.imageWidth  = this.dataWidth * this.scale;
+        this.imageHeight = this.dataHeight * this.scale;
+        this.zeroX = (this.svgWidth - this.imageWidth) / 2;
+        this.zeroY = this.svgHeight - (this.svgHeight - this.imageHeight) / 2;
+
+        this.drawRides(50);
+        this.setupGenerateButton();
+        this.setupShowAllButton();
+      }
+
+      imageX(row, col) { return this.zeroX + col * this.scale; }
+      imageY(row, col) { return this.zeroY - row * this.scale; }
+
+      rideColor(qualifier) { if (qualifier > 0) return 'green'; if (qualifier < 0) return 'red'; return 'orange'; }
+      bonusColor(qualifier) { if (qualifier > 100) return 'yellow'; return this.rideColor(qualifier); }
+
+      drawRideShape(x1, y1, x2, y2, qualifier) {
+        this.svg.append('line').attr('x1', x1).attr('y1', y1).attr('x2', x2).attr('y2', y1)
+          .attr('stroke-width', this.lineWidth).attr('stroke', this.rideColor(qualifier)).classed('ride', true);
+        this.svg.append('line').attr('x1', x2).attr('y1', y1).attr('x2', x2).attr('y2', y2)
+          .attr('stroke-width', this.lineWidth).attr('stroke', this.rideColor(qualifier)).classed('ride', true);
+        this.svg.append('circle').attr('cx', x1).attr('cy', y1).attr('r', this.lineWidth * 1.5)
+          .attr('stroke', this.bonusColor(qualifier)).attr('fill', this.bonusColor(qualifier)).classed('ride', true);
+      }
+
+      drawRide(startRow, startCol, finishRow, finishCol, qualifier, rideId) {
+        const x1 = this.imageX(startRow, startCol);
+        const y1 = this.imageY(startRow, startCol);
+        const x2 = this.imageX(finishRow, finishCol);
+        const y2 = this.imageY(finishRow, finishCol);
+        this.drawRideShape(x1, y1, x2, y2, qualifier);
+
+        if (qualifier < 0) {
+          const li = document.createElement('li');
+          li.textContent = `Ride #${rideId}`;
+          this.missedListEl.appendChild(li);
+        }
+      }
+
+      drawBackground() {
+        this.svg.append('rect')
+          .attr('x', this.zeroX - this.lineWidth * 2)
+          .attr('y', (this.svgHeight - this.zeroY) - this.lineWidth * 2)
+          .attr('width', this.imageWidth + 4 * this.lineWidth)
+          .attr('height', this.imageHeight + 4 * this.lineWidth)
+          .attr('fill', '#e9ecef')
+          .attr('stroke-width', 1)
+          .style('stroke-dasharray', '3,3');
+
+        // Grid & axes
+        const stepX = Math.max(1, Math.floor(this.dataWidth / (this.maxRides < this.data.rides.length ? 20 : 10)));
+        const stepY = Math.max(1, Math.floor(this.dataHeight / (this.maxRides < this.data.rides.length ? 20 : 10)));
+
+        for (let c = 0; c <= this.dataWidth; c += stepX) {
+          this.svg.append('line')
+            .attr('x1', this.imageX(0, c))
+            .attr('y1', this.imageY(0, 0))
+            .attr('x2', this.imageX(0, c))
+            .attr('y2', this.imageY(this.dataHeight, 0))
+            .attr('stroke', '#bbb')
+            .attr('stroke-width', 0.5);
+          this.svg.append('text')
+            .attr('x', this.imageX(0, c))
+            .attr('y', this.imageY(0, 0) + 10)
+            .attr('font-size', 10)
+            .attr('fill', '#333')
+            .attr('text-anchor', 'middle')
+            .text(c);
+        }
+
+        for (let r = 0; r <= this.dataHeight; r += stepY) {
+          this.svg.append('line')
+            .attr('x1', this.imageX(r, 0))
+            .attr('y1', this.imageY(r, 0))
+            .attr('x2', this.imageX(r, this.dataWidth))
+            .attr('y2', this.imageY(r, 0))
+            .attr('stroke', '#bbb')
+            .attr('stroke-width', 0.5);
+          this.svg.append('text')
+            .attr('x', this.imageX(r, 0) - 10)
+            .attr('y', this.imageY(r, 0) + 3)
+            .attr('font-size', 10)
+            .attr('fill', '#333')
+            .attr('text-anchor', 'end')
+            .text(r);
+        }
+      }
+
+      drawRides(maxRides = 50) {
+        this.maxRides = maxRides;
+        this.svg.selectAll('.ride').remove();
+        this.missedListEl.innerHTML = '';
+        this.svg.selectAll('line, text').remove(); // xóa grid cũ
+        this.drawBackground(); // vẽ background + grid
+
+        const rides = this.data.rides || [];
+        const n = Math.min(maxRides, rides.length);
+        for (let i = 0; i < n; i++) {
+          const idx = rides.length > maxRides ? Math.floor(Math.random() * rides.length) : i;
+          const r = rides[idx];
+          this.drawRide(r[0], r[1], r[2], r[3], r[4], idx);
+        }
+      }
+
+      setupGenerateButton() {
+        document.getElementById('generate').addEventListener('click', () => this.drawRides(50));
+      }
+
+      setupShowAllButton() {
+        document.getElementById('showall').addEventListener('click', () => this.drawRides(this.data.rides.length));
+      }
+    }
+
+    // File drag/drop
+    const holder = document.getElementById('holder');
+    if ('draggable' in document.createElement('span')) {
+      holder.ondragover = e => { e.preventDefault(); holder.classList.add('hover'); return false; };
+      holder.ondragend = () => { holder.classList.remove('hover'); return false; };
+      holder.ondrop = e => { e.preventDefault(); holder.classList.remove('hover'); handleFiles(e.dataTransfer.files); };
+    } else {
+      const p = document.createElement('p');
+      p.innerHTML = '<label>Upload: <input type="file" id="fileInput"></label>';
+      holder.appendChild(p);
+      document.getElementById('fileInput').addEventListener('change', ev => handleFiles(ev.target.files));
+    }
+
+    function previewFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        $('#exampleModalCenter').modal('toggle');
+        document.querySelector('#svg').innerHTML = '';
+        try {
+          const parsed = JSON.parse(reader.result);
+          window.visualizer = new HashcodeVisualizer(d3.select('svg'), parsed);
+        } catch (err) {
+          alert('Không đọc được JSON: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function handleFiles(files) { for (let i = 0; i < files.length; i++) previewFile(files[i]); }
+    window.__loadSample = sampleData => { document.querySelector('#svg').innerHTML = ''; new HashcodeVisualizer(d3.select('svg'), sampleData); };
+
+  })();
+  </script>
+</body>
+</html>
